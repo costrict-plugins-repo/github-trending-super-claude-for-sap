@@ -1,0 +1,148 @@
+#!/usr/bin/env node
+
+/**
+ * sc4sap PreToolUse Hook: SAP MCP Permission Approver
+ *
+ * Auto-approves SAP MCP handler calls so automated pipelines (create-program,
+ * create-object, analyze-*, team, …) and their sub-agents run without per-call
+ * permission prompts.
+ *
+ * Why a hook (and not the old trust-session mechanism):
+ *   - The Agent-tool `mode: "dontAsk"` parameter that the pipelines relied on is
+ *     deprecated/ignored in current Claude Code — sub-agents inherit the parent
+ *     session's permission mode instead. (docs: code.claude.com/docs/en/sub-agents)
+ *   - A PreToolUse hook runs for MCP tools in BOTH the main thread and sub-agents,
+ *     and its decision is honored regardless of session mode or settings reload
+ *     timing. (docs: code.claude.com/docs/en/hooks — permissionDecision)
+ *
+ * Policy:
+ *   - `mcp__plugin_sc4sap_sap__*` and `mcp__mcp-abap-adt__*`  → permissionDecision "allow"
+ *   - EXCEPT the two row-data extraction tools, which are never auto-approved and
+ *     fall through to normal prompting + the block-forbidden-tables safeguard:
+ *       · GetTableContents
+ *       · GetRemoteTableContents (rows of another system over SM59)
+ *       · GetSqlQuery
+ *     One narrow exception: a GetSqlQuery that is a DD* repository metadata read
+ *     in the shape stock-cbo Step G3a uses (lib/dd-metadata-query.mjs) is allowed.
+ *   - The business-action tools that change business data are never auto-approved
+ *     either (each preview / execution is a user decision, /sc4sap:assist):
+ *       · PreviewBusinessAction
+ *       · ExecuteBusinessAction
+ *   - Every other tool → no decision (normal permission flow preserved).
+ *
+ * Kill switch: DISABLE_SC4SAP=1 disables auto-approval.
+ */
+
+import { readStdin } from './lib/stdin.mjs';
+import { isDdMetadataQuery } from './lib/dd-metadata-query.mjs';
+
+function extractToolInput(input) {
+  try {
+    return JSON.parse(input).tool_input;
+  } catch {
+    return undefined;
+  }
+}
+
+const SAP_NAMESPACES = ['mcp__plugin_sc4sap_sap__', 'mcp__mcp-abap-adt__'];
+
+// Row-level data extraction — must always remain an explicit user decision.
+const GATED_TOOLS = ['GetTableContents', 'GetRemoteTableContents', 'GetSqlQuery'];
+
+// Business-data changes (/sc4sap:assist) — always an explicit user decision.
+const BUSINESS_WRITE_TOOLS = ['PreviewBusinessAction', 'ExecuteBusinessAction'];
+
+function extractJsonField(input, field, defaultValue = '') {
+  try {
+    const data = JSON.parse(input);
+    return data[field] ?? defaultValue;
+  } catch {
+    const match = input.match(new RegExp(`"${field}"\\s*:\\s*"([^"]*)"`, 'i'));
+    return match ? match[1] : defaultValue;
+  }
+}
+
+function passthrough() {
+  console.log(JSON.stringify({ continue: true, suppressOutput: true }));
+}
+
+async function main() {
+  if (process.env.DISABLE_SC4SAP === '1') {
+    passthrough();
+    return;
+  }
+
+  try {
+    const input = await readStdin();
+    const toolName =
+      extractJsonField(input, 'tool_name') ||
+      extractJsonField(input, 'toolName', 'unknown');
+
+    const namespace = SAP_NAMESPACES.find((ns) => toolName.startsWith(ns));
+    if (!namespace) {
+      passthrough();
+      return;
+    }
+
+    const handler = toolName.slice(namespace.length);
+    if (handler === 'GetSqlQuery' && isDdMetadataQuery(extractToolInput(input))) {
+      // stock-cbo G3a: one DD* repository table, explicit columns, output "file".
+      console.log(
+        JSON.stringify({
+          continue: true,
+          hookSpecificOutput: {
+            hookEventName: 'PreToolUse',
+            permissionDecision: 'allow',
+            permissionDecisionReason:
+              'sc4sap: DD* metadata read (stock-cbo G3a) auto-approved; other GetSqlQuery calls stay prompt-gated.',
+          },
+        })
+      );
+      return;
+    }
+    if (BUSINESS_WRITE_TOOLS.includes(handler)) {
+      // IF.* (the interface test call, 2026-11-18) is the web app's /interfaces button only: an agent
+      // session never runs it, whatever the user answers (the web reaches it without an agent hook).
+      const action = String(extractToolInput(input)?.action ?? '');
+      if (/^IF\./i.test(action)) {
+        console.log(
+          JSON.stringify({
+            continue: true,
+            hookSpecificOutput: {
+              hookEventName: 'PreToolUse',
+              permissionDecision: 'deny',
+              permissionDecisionReason:
+                'sc4sap: IF.* actions (interface test calls) run only from the web app\'s interface test button.',
+            },
+          })
+        );
+        return;
+      }
+      // Never auto-approve a business preview or execution.
+      passthrough();
+      return;
+    }
+    if (GATED_TOOLS.includes(handler)) {
+      // Never auto-approve row-data extraction — leave to normal prompt + safeguard.
+      passthrough();
+      return;
+    }
+
+    console.log(
+      JSON.stringify({
+        continue: true,
+        hookSpecificOutput: {
+          hookEventName: 'PreToolUse',
+          permissionDecision: 'allow',
+          permissionDecisionReason:
+            'sc4sap: SAP MCP handler auto-approved (row-data extraction stays prompt-gated).',
+        },
+      })
+    );
+  } catch {
+    // Never block the workflow on hook failure — fall back to normal prompting.
+    passthrough();
+  }
+}
+
+main();

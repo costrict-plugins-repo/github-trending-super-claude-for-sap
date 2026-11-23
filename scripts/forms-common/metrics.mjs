@@ -1,0 +1,132 @@
+// Shared by the form renderers: advance widths of the PDF standard sans fonts (Helvetica / Helvetica-Bold,
+// metric-compatible with Arial), 1/1000 em, for text measuring without a browser (line breaks, right and
+// centre alignment). ADS writes Arial text as the standard 14 fonts Helvetica / Helvetica-Bold, whose
+// widths are the published AFM metrics below. Characters outside the table count as an 'n'.
+//
+//   textWidthMm(text, pt, { bold, face }) → width in mm (face Courier*: monospaced 600 / 1000 em)
+//   charWidth(ch, bold)               → 1/1000 em
+//   VMETRICS                          → vertical metrics in em (Arial OS/2 typo ascent / descent / gap, hhea line)
+
+const ASCII = {
+  // code 32 … 126
+  regular: [278, 278, 355, 556, 556, 889, 667, 191, 333, 333, 389, 584, 278, 333, 278, 278,
+    556, 556, 556, 556, 556, 556, 556, 556, 556, 556, 278, 278, 584, 584, 584, 556,
+    1015, 667, 667, 722, 722, 667, 611, 778, 722, 278, 500, 667, 556, 833, 722, 778,
+    667, 778, 722, 667, 611, 722, 667, 944, 667, 667, 611, 278, 278, 278, 469, 556,
+    333, 556, 556, 500, 556, 556, 278, 556, 556, 222, 222, 500, 222, 833, 556, 556,
+    556, 556, 333, 500, 278, 556, 500, 722, 500, 500, 500, 334, 260, 334, 584],
+  bold: [278, 333, 474, 556, 556, 889, 722, 238, 333, 333, 389, 584, 278, 333, 278, 278,
+    556, 556, 556, 556, 556, 556, 556, 556, 556, 556, 333, 333, 584, 584, 584, 611,
+    975, 722, 722, 722, 722, 667, 611, 778, 722, 278, 556, 722, 611, 833, 722, 778,
+    667, 778, 722, 667, 611, 722, 667, 944, 667, 667, 611, 333, 278, 333, 584, 556,
+    333, 556, 611, 556, 611, 556, 333, 611, 611, 278, 278, 556, 278, 889, 611, 611,
+    611, 611, 389, 556, 333, 611, 556, 778, 556, 556, 500, 389, 280, 389, 584],
+};
+
+// Latin-1 160 … 255
+const LATIN1 = {
+  regular: [278, 333, 556, 556, 556, 556, 260, 556, 333, 737, 370, 556, 584, 333, 737, 333,
+    400, 584, 333, 333, 333, 556, 537, 278, 333, 333, 365, 556, 834, 834, 834, 611,
+    667, 667, 667, 667, 667, 667, 1000, 722, 667, 667, 667, 667, 278, 278, 278, 278,
+    722, 722, 778, 778, 778, 778, 778, 584, 778, 722, 722, 722, 722, 667, 667, 611,
+    556, 556, 556, 556, 556, 556, 889, 500, 556, 556, 556, 556, 278, 278, 278, 278,
+    556, 556, 556, 556, 556, 556, 556, 584, 611, 556, 556, 556, 556, 500, 556, 500],
+  bold: [278, 333, 556, 556, 556, 556, 280, 556, 333, 737, 370, 556, 584, 333, 737, 333,
+    400, 584, 333, 333, 333, 611, 556, 278, 333, 333, 365, 556, 834, 834, 834, 611,
+    722, 722, 722, 722, 722, 722, 1000, 722, 667, 667, 667, 667, 278, 278, 278, 278,
+    722, 722, 778, 778, 778, 778, 778, 584, 778, 722, 722, 722, 722, 667, 667, 611,
+    556, 556, 556, 556, 556, 556, 889, 556, 556, 556, 556, 556, 278, 278, 278, 278,
+    611, 611, 611, 611, 611, 611, 611, 584, 611, 611, 611, 611, 611, 556, 611, 556],
+};
+
+// typographic punctuation and a few signs (Unicode → [regular, bold])
+const EXTRA = {
+  '€': [556, 556], '‚': [222, 278], 'ƒ': [556, 556], '„': [333, 500], '…': [1000, 1000],
+  '†': [556, 556], '‡': [556, 556], 'ˆ': [333, 333], '‰': [1000, 1000], 'Š': [667, 667],
+  '‹': [333, 333], 'Œ': [1000, 1000], 'Ž': [611, 611], '‘': [222, 278], '’': [222, 278],
+  '“': [333, 500], '”': [333, 500], '•': [350, 350], '–': [556, 556], '—': [1000, 1000],
+  '˜': [333, 333], '™': [1000, 1000], 'š': [500, 556], '›': [333, 333], 'œ': [944, 944],
+  'ž': [500, 500], 'Ÿ': [667, 667], ' ': [278, 278],
+};
+
+export function charWidth(ch, bold = false) {
+  const c = ch.codePointAt(0);
+  const k = bold ? 'bold' : 'regular';
+  if (c >= 32 && c <= 126) return ASCII[k][c - 32];
+  if (c >= 160 && c <= 255) return LATIN1[k][c - 160];
+  const e = EXTRA[ch];
+  if (e) return e[bold ? 1 : 0];
+  if (c >= 0x1100) return 1000; // CJK and other wide scripts: one em
+  return ASCII[k]['n'.charCodeAt(0) - 32];
+}
+
+// Times-Roman / Times-Bold (the standard 14 fonts ADS prints Times New Roman as; Times New Roman is metric-compatible),
+// AFM widths: ASCII 32 … 126, then Latin-1 160 … 255. Italic text takes the upright widths (approximation).
+const TIMES = {
+  regular: [250, 333, 408, 500, 500, 833, 778, 180, 333, 333, 500, 564, 250, 333, 250, 278,
+    500, 500, 500, 500, 500, 500, 500, 500, 500, 500, 278, 278, 564, 564, 564, 444,
+    921, 722, 667, 667, 722, 611, 556, 722, 722, 333, 389, 722, 611, 889, 722, 722,
+    556, 722, 667, 556, 611, 722, 722, 944, 722, 722, 611, 333, 278, 333, 469, 500,
+    333, 444, 500, 444, 500, 444, 333, 500, 500, 278, 278, 500, 278, 778, 500, 500,
+    500, 500, 333, 389, 278, 500, 500, 722, 500, 500, 444, 480, 200, 480, 541],
+  bold: [250, 333, 555, 500, 500, 1000, 833, 278, 333, 333, 500, 570, 250, 333, 250, 278,
+    500, 500, 500, 500, 500, 500, 500, 500, 500, 500, 333, 333, 570, 570, 570, 500,
+    930, 722, 667, 722, 722, 667, 611, 778, 778, 389, 500, 778, 667, 944, 722, 778,
+    611, 778, 722, 556, 667, 722, 722, 1000, 722, 722, 667, 333, 278, 333, 581, 500,
+    333, 500, 556, 444, 556, 444, 333, 500, 556, 278, 333, 556, 278, 833, 556, 500,
+    556, 556, 444, 389, 333, 556, 500, 722, 500, 500, 444, 394, 220, 394, 520],
+  latin1: {
+    regular: [250, 333, 500, 500, 500, 500, 200, 500, 333, 760, 276, 500, 564, 333, 760, 333,
+      400, 564, 300, 300, 333, 500, 453, 250, 333, 300, 310, 500, 750, 750, 750, 444,
+      722, 722, 722, 722, 722, 722, 889, 667, 611, 611, 611, 611, 333, 333, 333, 333,
+      722, 722, 722, 722, 722, 722, 722, 564, 722, 722, 722, 722, 722, 722, 556, 500,
+      444, 444, 444, 444, 444, 444, 667, 444, 444, 444, 444, 444, 278, 278, 278, 278,
+      500, 500, 500, 500, 500, 500, 500, 564, 500, 500, 500, 500, 500, 500, 500, 500],
+    bold: [250, 333, 500, 500, 500, 500, 220, 500, 333, 747, 300, 500, 570, 333, 747, 333,
+      400, 570, 300, 300, 333, 556, 540, 250, 333, 300, 330, 500, 750, 750, 750, 500,
+      722, 722, 722, 722, 722, 722, 1000, 722, 667, 667, 667, 667, 389, 389, 389, 389,
+      722, 722, 778, 778, 778, 778, 778, 570, 778, 722, 722, 722, 722, 722, 611, 556,
+      500, 500, 500, 500, 500, 500, 722, 444, 444, 444, 444, 444, 278, 278, 278, 278,
+      500, 556, 500, 500, 500, 500, 500, 570, 500, 556, 556, 556, 556, 500, 556, 500],
+  },
+};
+
+function timesWidth(ch, bold) {
+  const c = ch.codePointAt(0);
+  const k = bold ? 'bold' : 'regular';
+  if (c >= 32 && c <= 126) return TIMES[k][c - 32];
+  if (c >= 160 && c <= 255) return TIMES.latin1[k][c - 160];
+  if (c >= 0x1100) return 1000;
+  return TIMES[k]['n'.charCodeAt(0) - 32];
+}
+
+export function textWidthMm(text, pt, { bold = false, face = '' } = {}) {
+  let w = 0;
+  // Courier / Courier New: every character 600 / 1000 em
+  if (/courier/i.test(String(face))) { for (const ch of String(text)) w += ch.codePointAt(0) >= 0x1100 ? 1000 : 600; return (w / 1000) * pt * (25.4 / 72); }
+  if (/times/i.test(String(face))) { for (const ch of String(text)) w += timesWidth(ch, bold); return (w / 1000) * pt * (25.4 / 72); }
+  // Comic Sans MS is not on the ADS server: it prints Myriad Pro, here 0.92 × the Helvetica widths (FP_TEST_01's three
+  // headings: 0.918 – 0.925; an approximation, Myriad's own widths are not tabled)
+  const k = /comic sans|myriad/i.test(String(face)) ? 0.92 : 1;
+  for (const ch of String(text)) w += charWidth(ch, bold);
+  return (k * w / 1000) * pt * (25.4 / 72);
+}
+
+/** Vertical metrics in em: typo ascent / descent / line gap (Arial OS/2), the hhea line (ascent + descent + gap) and
+ *  the line pitch ADS uses for draws / rich text / captions of XFA 2.4+ templates (measured on its PDFs). */
+export const VMETRICS = { ascent: 0.728, descent: 0.21, gap: 0.15, line: 1.15, richLine: 1.1376 };
+
+/** Per-face vertical metrics ADS uses for draws / rich text of XFA 2.4+ templates, in em — measured on the
+ *  calibration form (Courier New prints as CourierStd, Times New Roman as Times-Roman, Arial as Helvetica):
+ *  first baseline below the line top (ascent), line pitch (line), and the lowest first baseline a smaller CSS
+ *  line-height can pull it up to (floor = the font's ascender), and for Courier the box of one line (content: 1 em,
+ *  calibration 3 H1 / H6). line null = the caller's factor. */
+const FACE_VM = {
+  courier: { ascent: 0.654, line: 1.2, floor: 0.629, content: 1 },
+  times: { ascent: 0.709, line: 1.111, floor: 0.683 },
+  sans: { ascent: VMETRICS.ascent, line: null, floor: 0.718 },
+};
+export function faceVMetrics(face) {
+  const f = String(face || '');
+  return /courier/i.test(f) ? FACE_VM.courier : /times/i.test(f) ? FACE_VM.times : FACE_VM.sans;
+}
